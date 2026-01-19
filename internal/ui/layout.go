@@ -3,9 +3,6 @@ package ui
 
 import tea "github.com/charmbracelet/bubbletea"
 
-// paneInnerPadding is the vertical padding inside panes (for borders, spacing, etc.)
-const paneInnerPadding = 5
-
 // Layout represents the dimensions and positions of UI panes.
 type Layout struct {
 	// Width is the total terminal width.
@@ -55,8 +52,10 @@ func CalculateLayout(msg tea.WindowSizeMsg) Layout {
 	// Chat buffer: remaining width
 	chatWidth := width - sessionWidth
 
-	// Content height (total - title bar - input - pane padding)
-	contentHeight := height - titleBarHeight - inputHeight - paneInnerPadding
+	contentHeight := height - titleBarHeight - inputHeight
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
 
 	return Layout{
 		Width:  width,
