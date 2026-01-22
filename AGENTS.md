@@ -82,37 +82,7 @@ go test -v ./internal/chat -run 'TestModel'
 go test -v ./internal/chat -run '^TestName$' -count=1
 ```
 
-## Testing Notes (tmux)
 
-This is a TUI program; when you add integration/e2e tests that require a real terminal multiplexer,
-use `tmux` to create an isolated session for the test, then delete it when the test finishes.
-
-Guidelines:
-- Use a unique session name per test run (include PID + timestamp).
-- Always cleanup even on failure (Go: `t.Cleanup(...)`; shell: `trap ... EXIT`).
-- Prefer `tmux has-session -t <name>` to detect and avoid collisions.
-
-Example (shell):
-
-```bash
-SESSION="vai-test-$$-$(date +%s)"
-trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true' EXIT
-
-tmux new-session -d -s "$SESSION" "./build/vai"
-# ... assertions / captures ...
-```
-
-Example (Go test helper):
-
-```go
-// Create session, ensure cleanup.
-cmd := exec.Command("tmux", "new-session", "-d", "-s", sessionName, "./build/vai")
-if err := cmd.Run(); err != nil { t.Fatal(err) }
-
-t.Cleanup(func() {
-	_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-})
-```
 
 ## Code Style (Go)
 
@@ -152,45 +122,163 @@ Architecture expectations (Bubble Tea):
 - `internal/clipboard/`, `internal/config/`: platform + configuration
 - `pkg/`: public packages (currently `pkg/markdown`)
 
-## TUI Smoke Check via tmux (agent workflow)
+# TUI Verification Workflow (tmux-based)
 
+This project is a **TUI (Terminal User Interface) program written in Go**.
 
-当修改完关于ui方面的代码,检查task,如果task中设计ui的改动,使用以下方式测试,ui是否符合task改动的预期
-When someone says the UI "looks wrong", reproduce the screen inside tmux and capture the pane output.
-This is intentionally non-interactive: start the program, wait briefly, then `capture-pane`.
+Any change that affects **TUI behavior, layout, or interaction** MUST follow this workflow.
+The purpose is to ensure that all user-visible effects are verified in a **real terminal environment** using `tmux`.
 
-Prereqs:
-- `tmux` installed
-- A tmux session named `vai` exists (create it manually if needed)
+---
 
-Commands (run from repo root):
+## Core Principles
+
+1. **Plan first**
+   - Describe the expected user-visible effect before coding.
+2. **Implement**
+   - Modify the TUI-related code.
+3. **Verify**
+   - Run the program inside `tmux`.
+4. **Assert**
+   - Capture terminal output and confirm it matches the plan.
+
+Skipping any step invalidates the change.
+
+---
+
+## tmux Conventions
+
+| Item    | Value |
+|--------|-------|
+| Session | `vai` |
+| Window  | `vai` |
+| Program | `vai` |
+
+All verification MUST happen inside this tmux session and window.
+
+---
+
+## Step 1: Check tmux session
+
+Check whether a tmux session named `vai` exists.
 
 ```bash
-# Build first
-make build
-
-# Pick window 1 pane id
-PANE=$(tmux list-panes -t vai:1 -F '#{pane_id}' | head -n 1)
-
-# Stop whatever is currently running in that pane (best-effort)
-tmux send-keys -t "$PANE" C-c
-
-# Start the TUI
-tmux send-keys -t "$PANE" "cd /Users/finger/code/my-code/vai && ./build/vai" C-m
-
-# Allow the UI to paint
-sleep 1.2
-
-# Capture visible output (use -J to join wrapped lines)
-tmux capture-pane -pJ -t "$PANE" -S -200
+tmux has-session -t vai 2>/dev/null
 ```
 
-Notes:
-- For Bubble Tea apps using alt-screen, capture while the program is running.
-- Prefer using `#{pane_id}` rather than window indices to avoid off-by-one issues.
+### If the session does not exist, create it
 
-## AI/Tooling Rules
+```bash
+tmux new-session -d -s vai
+```
 
-- If the request mentions "proposal", "spec", "change", or "plan": read `openspec/AGENTS.md` first.
-- Cursor rules: none found in `.cursor/rules/` or `.cursorrules`.
-- Copilot rules: none found in `.github/copilot-instructions.md`.
+---
+
+## Step 2: Check tmux window
+
+Check whether the `vai` session has a window named `vai`.
+
+```bash
+tmux list-windows -t vai
+```
+
+### If the window does not exist, create it
+
+```bash
+tmux new-window -t vai -n vai
+```
+
+---
+
+## Step 3: Run the TUI program
+
+The TUI program **MUST** be started from the **current project root directory**  
+and **MUST** use `go run`.
+
+Running a precompiled binary is **NOT allowed**.
+
+### 3.1 Enter the project root directory
+
+The project root SHOULD be determined explicitly, for example:
+
+```bash
+git rev-parse --show-toplevel
+```
+
+Then enter the directory inside tmux:
+
+```bash
+tmux send-keys -t vai:vai 'cd /path/to/current/project' C-m
+```
+
+> Agents MUST NOT assume a fixed directory path.
+
+---
+
+### 3.2 Start the TUI program using `go run`
+
+If the project root is the entry point:
+
+```bash
+tmux send-keys -t vai:vai 'go run .' C-m
+```
+
+If the entry point is under `cmd/vai`:
+
+```bash
+tmux send-keys -t vai:vai 'go run ./cmd/vai' C-m
+```
+
+---
+
+### Enforcement rules (Step 3)
+
+- MUST run from project root
+- MUST use `go run`
+- MUST reflect latest source code
+- MUST NOT execute a prebuilt `vai` binary
+
+---
+
+## Step 4: Capture and verify output
+
+After the TUI program is running, capture the pane output:
+
+```bash
+tmux capture-pane -t vai:vai -p
+```
+
+### Verification checklist
+
+Captured output MUST match the planned effect:
+
+- Layout is correct
+- UI elements appear as expected
+- No unexpected errors or visual artifacts
+- Interaction flow matches the plan
+
+If any check fails, the change is **invalid** and must be revised.
+
+---
+
+## Mandatory Rules for Agents
+
+- TUI changes MUST be verified using tmux
+- Do NOT rely on screenshots, assumptions, or imagination
+- Every TUI change MUST have:
+  - a plan
+  - a tmux run
+  - a captured output
+  - a verification decision
+
+---
+
+## Example Verification Loop
+
+1. Describe expected UI behavior
+2. Modify TUI code
+3. Run via tmux using `go run`
+4. Capture pane output
+5. Compare output with the plan
+
+Only after all steps succeed is the change considered **complete**.
